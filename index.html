@@ -31,4 +31,179 @@ td.a input{flex:0 0 64px;padding:5px 6px}
 #rcpt .box{background:#fff;color:#111;border-radius:10px;padding:24px;width:100%;max-width:380px}
 #rcpt h2{text-align:center;font-size:18px;margin-bottom:14px}
 #rcpt dl{margin:0 0 20px}#rcpt dt{font-size:12px;color:#666}#rcpt dd{margin:0 0 8px;font-weight:600}
-#rcpt .sig{border-top:1px solid #111;margin-top:36px;padding-top:4px;text-al
+#rcpt .sig{border-top:1px solid #111;margin-top:36px;padding-top:4px;text-align:center;font-size:12px;color:#444}
+#rcpt .btns{display:flex;gap:8px;margin-top:16px}
+[hidden]{display:none!important}
+@media print{main{display:none!important}#rcpt{position:static;background:none;padding:0}#rcpt .btns{display:none}}
+</style>
+</head>
+<body>
+<main>
+  <h1>📦 Inventario</h1>
+  <div id="msg"></div>
+
+  <div class="card">
+    <h2>Añadir producto</h2>
+    <form id="fAdd">
+      <input id="nName" placeholder="Nombre del producto" required>
+      <input id="nQty" type="number" min="0" value="0" style="flex:0 1 130px" aria-label="Cantidad inicial">
+      <button>Añadir</button>
+    </form>
+  </div>
+
+  <div class="card who">
+    <h2>¿Quién retira?</h2>
+    <input id="person" placeholder="Nombre de quien retira el producto" style="width:100%">
+  </div>
+
+  <div class="card">
+    <h2>Productos</h2>
+    <div class="wrap"><table>
+      <thead><tr><th>Producto</th><th>Stock</th><th>Mover (cantidad)</th><th></th></tr></thead>
+      <tbody id="prods"></tbody>
+    </table></div>
+    <div class="empty" id="noProds" hidden>Aún no hay productos.</div>
+  </div>
+
+  <div class="card">
+    <h2>Registro de movimientos</h2>
+    <div class="wrap"><table>
+      <thead><tr><th>Folio</th><th>Fecha</th><th>Producto</th><th>Movimiento</th><th>Persona</th><th></th></tr></thead>
+      <tbody id="log"></tbody>
+    </table></div>
+    <div class="empty" id="noLog" hidden>Sin movimientos todavía.</div>
+  </div>
+</main>
+
+<div id="rcpt" hidden>
+  <div class="box">
+    <h2>Comprobante de salida</h2>
+    <dl>
+      <dt>Folio</dt><dd id="rFolio"></dd>
+      <dt>Fecha</dt><dd id="rDate"></dd>
+      <dt>Producto</dt><dd id="rProd"></dd>
+      <dt>Cantidad entregada</dt><dd id="rQty"></dd>
+      <dt>Retiró</dt><dd id="rPerson"></dd>
+    </dl>
+    <div class="sig">Firma de quien retira</div>
+    <div class="btns"><button onclick="window.print()">Imprimir / guardar PDF</button><button class="s" id="rClose">Cerrar</button></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+// ====== CONFIGURACIÓN DE SUPABASE ======
+const SUPABASE_URL  = "https://nhxmtyigcsvjcbwjnyn.supabase.co";
+const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5oeG10eWlnY3N2anRjYndqbnluIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEyODY1OTEsImV4cCI6MjEwNjg2MjU5MX0.DzEtkhYtaievZvbS-xvXRXc0MgnmRN422so5ME29M30";
+// =======================================
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+const $ = id => document.getElementById(id);
+const esc = s => { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; };
+const fmt = iso => new Date(iso).toLocaleString("es", { dateStyle: "medium", timeStyle: "short" });
+let products = [];
+const msg = t => $("msg").textContent = t || "";
+
+async function refresh() {
+  const [p, m] = await Promise.all([
+    sb.from("products").select("*").order("name"),
+    sb.from("moves").select("*").order("created_at", { ascending: false }).limit(200)
+  ]);
+  if (p.error || m.error) return msg((p.error || m.error).message);
+  products = p.data;
+  renderProds();
+  renderLog(m.data);
+}
+
+function renderProds() {
+  const tb = $("prods"); tb.innerHTML = "";
+  $("noProds").hidden = products.length > 0;
+  products.forEach(p => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${esc(p.name)}</td><td class="${p.qty <= 0 ? "low" : ""}">${p.qty}</td>
+      <td class="a"><input type="number" min="1" value="1" aria-label="Cantidad"><button class="s" data-a="in">+ Entrada</button><button data-a="out">− Salida</button></td>
+      <td><button class="d" data-a="del">Eliminar</button></td>`;
+    tr.querySelectorAll("button").forEach(b => b.onclick = () => {
+      const a = b.dataset.a, n = parseInt(tr.querySelector("input").value, 10) || 0;
+      if (a === "del") { if (confirm(`¿Eliminar «${p.name}»? El historial se conserva.`)) del(p); }
+      else move(p, a, n);
+    });
+    tb.appendChild(tr);
+  });
+}
+
+let rows = [];
+function renderLog(data) {
+  rows = data;
+  const tb = $("log"); tb.innerHTML = "";
+  $("noLog").hidden = rows.length > 0;
+  rows.forEach((m, i) => {
+    const t = m.type === "in" ? `<span class="in">+${m.qty} entrada</span>`
+            : m.type === "out" ? `<span class="out">−${m.qty} salida</span>`
+            : m.type === "new" ? `alta (+${m.qty})` : "eliminado";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>#${m.folio ?? ""}</td><td>${fmt(m.created_at)}</td><td>${esc(m.product_name)}</td><td>${t}</td><td>${esc(m.person || "—")}</td>
+      <td>${m.type === "out" ? '<button class="s">Comprobante</button>' : ""}</td>`;
+    const b = tr.querySelector("button"); if (b) b.onclick = () => receipt(rows[i]);
+    tb.appendChild(tr);
+  });
+}
+
+function receipt(m) {
+  $("rFolio").textContent = "#" + (m.folio ?? "");
+  $("rDate").textContent = fmt(m.created_at);
+  $("rProd").textContent = m.product_name;
+  $("rQty").textContent = m.qty;
+  $("rPerson").textContent = m.person || "—";
+  $("rcpt").hidden = false;
+}
+$("rClose").onclick = () => $("rcpt").hidden = true;
+
+const logMove = (p, type, qty, person) =>
+  sb.from("moves").insert({ product_id: p.id, product_name: p.name, type, qty, person: person || null }).select().single();
+
+async function run(fn) {
+  msg();
+  try { await fn(); } catch (e) { msg(e.message || String(e)); }
+  await refresh();
+}
+
+function move(p, a, n) {
+  const person = $("person").value.trim();
+  if (n < 1) return msg("Pon una cantidad mayor que 0.");
+  if (a === "out" && !person) { $("person").focus(); return msg("Escribe el nombre de quien retira."); }
+  if (a === "out" && n > p.qty) return msg(`No hay stock suficiente de «${p.name}» (hay ${p.qty}).`);
+  run(async () => {
+    const u = await sb.from("products").update({ qty: a === "in" ? p.qty + n : p.qty - n }).eq("id", p.id);
+    if (u.error) throw u.error;
+    const l = await logMove(p, a, n, person);
+    if (l.error) throw l.error;
+    if (a === "out") receipt(l.data);
+  });
+}
+
+function del(p) {
+  run(async () => {
+    const d = await sb.from("products").delete().eq("id", p.id);
+    if (d.error) throw d.error;
+    await logMove(p, "del", 0, $("person").value.trim());
+  });
+}
+
+$("fAdd").onsubmit = e => {
+  e.preventDefault();
+  const name = $("nName").value.trim(), qty = Math.max(0, parseInt($("nQty").value, 10) || 0);
+  if (!name) return;
+  run(async () => {
+    const r = await sb.from("products").insert({ name, qty }).select().single();
+    if (r.error) throw r.error;
+    await logMove(r.data, "new", qty, $("person").value.trim());
+    $("nName").value = ""; $("nQty").value = "0";
+  });
+};
+
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>
