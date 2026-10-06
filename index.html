@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inventario</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--tx:#1d2330;--mut:#6b7385;--bd:#e1e4ea;--ac:#2f5bea;--ok:#1f8a4c;--bad:#c53030}
+@media (prefers-color-scheme:dark){:root{--bg:#14171d;--card:#1d222b;--tx:#e8ebf1;--mut:#9099ab;--bd:#2d3441;--ac:#6b8cff;--ok:#4cc27f;--bad:#f26b6b}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:860px;margin:0 auto;padding:16px}
+header{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+h1{font-size:20px;margin:0}h2{font-size:15px;margin:0 0 10px}
+.who{color:var(--mut);font-size:13px;display:flex;gap:8px;align-items:center}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px;margin-bottom:14px}
+form{display:flex;gap:8px;flex-wrap:wrap}
+input{flex:1 1 120px;padding:8px 10px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx);font:inherit;min-width:0}
+button{padding:7px 12px;border:0;border-radius:8px;background:var(--ac);color:#fff;font:inherit;cursor:pointer}
+button.s{background:transparent;color:var(--tx);border:1px solid var(--bd)}
+button.d{background:transparent;color:var(--bad);border:1px solid var(--bd)}
+button:disabled{opacity:.5}
+.wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--bd);white-space:nowrap}
+th{font-size:12px;color:var(--mut);font-weight:600}
+td.a{display:flex;gap:6px;align-items:center}
+td.a input{flex:0 0 64px;padding:5px 6px}
+.in{color:var(--ok)}.out{color:var(--bad)}.low{color:var(--bad);font-weight:600}
+.empty{color:var(--mut);padding:8px 0}
+#msg{color:var(--bad);font-size:13px;min-height:18px;margin-bottom:8px}
+#login{max-width:380px;margin:60px auto}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+
+<!-- LOGIN -->
+<div id="login" class="card" hidden>
+  <h1>📦 Inventario</h1>
+  <p class="who">Inicia sesión para continuar</p>
+  <form id="fLogin" style="flex-direction:column">
+    <input id="lEmail" type="email" placeholder="Correo" required autocomplete="email">
+    <input id="lPass" type="password" placeholder="Contraseña" required autocomplete="current-password">
+    <button>Entrar</button>
+    <button type="button" class="s" id="bSignup">Crear cuenta</button>
+  </form>
+  <div id="lMsg" style="color:var(--bad);font-size:13px;margin-top:8px"></div>
+</div>
+
+<!-- APP -->
+<div id="app" hidden>
+  <header>
+    <h1>📦 Inventario</h1>
+    <div class="who"><span id="who"></span><button class="s" id="bOut">Salir</button></div>
+  </header>
+  <div id="msg"></div>
+
+  <div class="card">
+    <h2>Añadir producto</h2>
+    <form id="fAdd">
+      <input id="nName" placeholder="Nombre del producto" required>
+      <input id="nQty" type="number" min="0" value="0" style="flex:0 1 130px" aria-label="Cantidad inicial">
+      <button>Añadir</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Productos</h2>
+    <div class="wrap"><table>
+      <thead><tr><th>Producto</th><th>Stock</th><th>Mover (cantidad)</th><th></th></tr></thead>
+      <tbody id="prods"></tbody>
+    </table></div>
+    <div class="empty" id="noProds" hidden>Aún no hay productos.</div>
+  </div>
+
+  <div class="card">
+    <h2>Registro de movimientos</h2>
+    <div class="wrap"><table>
+      <thead><tr><th>Fecha</th><th>Producto</th><th>Movimiento</th><th>Usuario</th></tr></thead>
+      <tbody id="log"></tbody>
+    </table></div>
+    <div class="empty" id="noLog" hidden>Sin movimientos todavía.</div>
+  </div>
+</div>
+
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+// ====== PEGA AQUÍ TUS DATOS DE SUPABASE (Project Settings → API) ======
+const SUPABASE_URL  = "https://TU-PROYECTO.supabase.co";
+const SUPABASE_ANON = "TU_CLAVE_ANON_PUBLIC";
+// =======================================================================
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+const $ = id => document.getElementById(id);
+const esc = s => { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; };
+let me = null, products = [], timer = null;
+
+const msg = t => $("msg").textContent = t || "";
+
+// ---------- Sesión ----------
+async function showSession(session) {
+  me = session?.user || null;
+  $("login").hidden = !!me;
+  $("app").hidden = !me;
+  clearInterval(timer);
+  if (me) {
+    $("who").textContent = me.email;
+    await refresh();
+    timer = setInterval(refresh, 15000);
+  }
+}
+sb.auth.onAuthStateChange((_e, session) => showSession(session));
+sb.auth.getSession().then(({ data }) => showSession(data.session));
+
+$("fLogin").onsubmit = async e => {
+  e.preventDefault();
+  const { error } = await sb.auth.signInWithPassword({ email: $("lEmail").value.trim(), password: $("lPass").value });
+  $("lMsg").textContent = error ? error.message : "";
+};
+$("bSignup").onclick = async () => {
+  const { error } = await sb.auth.signUp({ email: $("lEmail").value.trim(), password: $("lPass").value });
+  $("lMsg").textContent = error ? error.message : "Cuenta creada. Revisa tu correo si te pide confirmarla.";
+};
+$("bOut").onclick = () => sb.auth.signOut();
+
+// ---------- Datos ----------
+async function refresh() {
+  const [p, m] = await Promise.all([
+    sb.from("products").select("*").order("name"),
+    sb.from("moves").select("*").order("created_at", { ascending: false }).limit(100)
+  ]);
+  if (p.error || m.error) return msg((p.error || m.error).message);
+  products = p.data;
+  renderProds();
+  renderLog(m.data);
+}
+
+function renderProds() {
+  const tb = $("prods"); tb.innerHTML = "";
+  $("noProds").hidden = products.length > 0;
+  products.forEach(p => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${esc(p.name)}</td><td class="${p.qty <= 0 ? "low" : ""}">${p.qty}</td>
+      <td class="a"><input type="number" min="1" value="1" aria-label="Cantidad"><button class="s" data-a="in">+ Entrada</button><button data-a="out">− Salida</button></td>
+      <td><button class="d" data-a="del">Eliminar</button></td>`;
+    tr.querySelectorAll("button").forEach(b => b.onclick = () => {
+      const a = b.dataset.a, n = parseInt(tr.querySelector("input").value, 10) || 0;
+      if (a === "del") { if (confirm(`¿Eliminar «${p.name}»? El historial se conserva.`)) del(p); }
+      else move(p, a, n);
+    });
+    tb.appendChild(tr);
+  });
+}
+
+function renderLog(rows) {
+  const tb = $("log"); tb.innerHTML = "";
+  $("noLog").hidden = rows.length > 0;
+  rows.forEach(m => {
+    const d = new Date(m.created_at).toLocaleString("es", { dateStyle: "short", timeStyle: "short" });
+    const t = m.type === "in" ? `<span class="in">+${m.qty} entrada</span>`
+            : m.type === "out" ? `<span class="out">−${m.qty} salida</span>`
+            : m.type === "new" ? `alta (+${m.qty})` : "eliminado";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${d}</td><td>${esc(m.product_name)}</td><td>${t}</td><td>${esc(m.user_email)}</td>`;
+    tb.appendChild(tr);
+  });
+}
+
+const logMove = (p, type, qty) =>
+  sb.from("moves").insert({ product_id: p.id, product_name: p.name, type, qty, user_email: me.email });
+
+async function run(fn) {
+  msg();
+  try { await fn(); } catch (e) { msg(e.message || String(e)); }
+  await refresh();
+}
+
+function move(p, a, n) {
+  if (n < 1) return msg("Pon una cantidad mayor que 0.");
+  if (a === "out" && n > p.qty) return msg(`No hay stock suficiente de «${p.name}» (hay ${p.qty}).`);
+  run(async () => {
+    const qty = a === "in" ? p.qty + n : p.qty - n;
+    const u = await sb.from("products").update({ qty }).eq("id", p.id);
+    if (u.error) throw u.error;
+    const l = await logMove(p, a, n);
+    if (l.error) throw l.error;
+  });
+}
+
+function del(p) {
+  run(async () => {
+    const d = await sb.from("products").delete().eq("id", p.id);
+    if (d.error) throw d.error;
+    await logMove(p, "del", 0);
+  });
+}
+
+$("fAdd").onsubmit = e => {
+  e.preventDefault();
+  const name = $("nName").value.trim(), qty = Math.max(0, parseInt($("nQty").value, 10) || 0);
+  if (!name) return;
+  run(async () => {
+    const r = await sb.from("products").insert({ name, qty }).select().single();
+    if (r.error) throw r.error;
+    await logMove(r.data, "new", qty);
+    $("nName").value = ""; $("nQty").value = "0";
+  });
+};
+</script>
+</body>
+</html>
